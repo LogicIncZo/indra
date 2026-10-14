@@ -156,6 +156,26 @@ def build_multi_tokens() -> list[str]:
     return out
 
 
+def build_tamil_tokens() -> list[str]:
+    """Latin base plus the Tamil block (U+0B80-0BFF), for a Tamil recognizer.
+
+    Tamil text mixes in ASCII digits and Latin punctuation; the Latin base
+    supplies them, so a Tamil line needs no second recognizer.  ``_script_chars``
+    keeps the combining vowel signs and the virama (U+0BCD): like Devanagari and
+    Bengali, Tamil writes vowel signs as separate codepoints even after NFC.
+    U+0BBC stays out on purpose: it is unassigned through Unicode 18.0 -- Tamil
+    has no nukta, unlike Devanagari and Bengali (checked against the Unicode
+    18.0 chart, 2026-10-14).
+    """
+    out = build_latin_chars()
+    seen = set(out)
+    for t in _script_chars(0x0B80, 0x0BFF):
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
 class Vocab:
     def __init__(self, chars: list[str]):
         self.chars = list(chars)  # tokens: characters, or LaTeX commands
@@ -171,10 +191,18 @@ class Vocab:
         return cls(build_multi_tokens())
 
     @classmethod
+    def tamil(cls) -> "Vocab":
+        return cls(build_tamil_tokens())
+
+    @classmethod
     def named(cls, name: str) -> "Vocab":
-        if name not in ("latin", "multi"):
+        if name not in ("latin", "multi", "tamil"):
             raise ValueError(f"unknown vocab {name!r}")
-        return cls.multi() if name == "multi" else cls.latin()
+        if name == "multi":
+            return cls.multi()
+        if name == "tamil":
+            return cls.tamil()
+        return cls.latin()
 
     def tokenize(self, text: str) -> list[str]:
         """Characters, with a LaTeX command as one token when the vocab has it.
@@ -246,10 +274,21 @@ class Vocab:
 # Indic syllable structure.  A broken font mapping (common in Nepali and Hindi
 # PDFs converted from legacy fonts) leaves vowel signs with no consonant before
 # them ("िामथ", "का ा") or two vowel signs in a row ("णािी"); valid text never does.
-_INDIC_BLOCKS = ((0x0900, 0x097F), (0x0980, 0x09FF))
-_VIRAMA = {0x094D, 0x09CD}
+# Tamil joins in: same shape, no nukta (U+0BBC is unassigned), and its visarga
+# (U+0B83) is a letter (Lo), so it never reaches the mark checks below.
+_INDIC_BLOCKS = ((0x0900, 0x097F), (0x0980, 0x09FF), (0x0B80, 0x0BFF))
+_VIRAMA = {0x094D, 0x09CD, 0x0BCD}
 _NUKTA = {0x093C, 0x09BC}
-_MODIFIERS = {0x0900, 0x0901, 0x0902, 0x0903, 0x0981, 0x0982, 0x0983}
+_MODIFIERS = {
+    0x0900,
+    0x0901,
+    0x0902,
+    0x0903,
+    0x0981,
+    0x0982,
+    0x0983,
+    0x0B82,  # Tamil anusvara; Tamil visarga 0x0B83 is Lo, not a mark
+}
 
 
 def _indic(c: str) -> bool:
@@ -258,7 +297,7 @@ def _indic(c: str) -> bool:
 
 
 def indic_valid(text: str) -> bool:
-    """False when a Devanagari or Bengali mark has no base to attach to."""
+    """False when a Devanagari, Bengali or Tamil mark has no base to attach to."""
     prev = ""
     for c in text:
         if _indic(c) and unicodedata.category(c) in ("Mn", "Mc"):
@@ -281,8 +320,9 @@ def indic_valid(text: str) -> bool:
 
 
 def indic_page_ok(texts: list[str], max_bad: float = 0.05) -> bool:
-    """A page whose Indic lines break syllable structure more than ``max_bad`` of
-    the time has a broken font mapping; its other lines are suspect too."""
+    """A page whose Indic (Devanagari, Bengali, Tamil) lines break syllable
+    structure more than ``max_bad`` of the time has a broken font mapping; its
+    other lines are suspect too."""
     ind = [t for t in texts if any(_indic(c) for c in t)]
     if not ind:
         return True

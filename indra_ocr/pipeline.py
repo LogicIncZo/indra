@@ -217,7 +217,18 @@ class OrtOCR:
         self.vocab = Vocab.from_json(meta["vocab"])
         # Chinese: a line classifier routes lines with hanzi to their own recognizer.
         self.script = self.rec_cjk = self.vocab_cjk = None
-        if (onnx_dir / "script.onnx").exists() and (onnx_dir / "rec_cjk.onnx").exists():
+        # Routing.  script3.onnx (3-class) supersedes the binary script.onnx:
+        # it names Tamil as well as hanzi.  Either way, a line whose route
+        # names a recognizer that is not loaded falls back to rec.onnx.
+        script3 = onnx_dir / "script3.onnx"
+        if script3.exists():
+            self.script = ort.InferenceSession(str(script3), so, providers=prov)
+            if (onnx_dir / "rec_cjk.onnx").exists() and meta.get("vocab_cjk"):
+                self.rec_cjk = ort.InferenceSession(
+                    str(onnx_dir / "rec_cjk.onnx"), so, providers=prov
+                )
+                self.vocab_cjk = Vocab.from_json(meta["vocab_cjk"])
+        elif (onnx_dir / "script.onnx").exists() and (onnx_dir / "rec_cjk.onnx").exists():
             self.script = ort.InferenceSession(
                 str(onnx_dir / "script.onnx"), so, providers=prov
             )
@@ -225,7 +236,14 @@ class OrtOCR:
                 str(onnx_dir / "rec_cjk.onnx"), so, providers=prov
             )
             self.vocab_cjk = Vocab.from_json(meta["vocab_cjk"])
-        # Math: a line classifier routes lines with math to MathRec (math.py).
+        # (the binary script.onnx cannot name Tamil; script3.onnx can).
+        self.rec_tamil = self.vocab_tamil = None
+        if (onnx_dir / "rec_tamil.onnx").exists() and meta.get("vocab_tamil"):
+            self.rec_tamil = ort.InferenceSession(
+                str(onnx_dir / "rec_tamil.onnx"), so, providers=prov
+            )
+            self.vocab_tamil = Vocab.from_json(meta["vocab_tamil"])
+        # Math: a line classifier routes lines with math to MathRec (math.py).        # Math: a line classifier routes lines with math to MathRec (math.py).
         self.math = MathReader.load(onnx_dir, so, prov) if math else None
         if math and self.math is None:
             raise FileNotFoundError(f"math=True needs the math models in {onnx_dir}")
@@ -272,21 +290,24 @@ class OrtOCR:
         out: list = [("", 0.0, [])] * len(crops)
         groups = [(self.rec, self.vocab, list(range(len(crops))), False)]
         if self.script is not None and crops:
-            hanzi = self.hanzi_lines(crops, batch)
-            groups = [
-                (
-                    self.rec,
-                    self.vocab,
-                    [j for j, h in enumerate(hanzi) if not h],
-                    False,
-                ),
-                (
-                    self.rec_cjk,
-                    self.vocab_cjk,
-                    [j for j, h in enumerate(hanzi) if h],
-                    True,
-                ),
-            ]
+            routes = self.script_routes(crops, batch)
+            multi = [j for j, r in enumerate(routes) if r == 0]
+            hanzi = [j for j, r in enumerate(routes) if r == 1]
+            tamil = [j for j, r in enumerate(routes) if r == 2]
+            # Routes whose recognizer is not loaded fall back to multi.
+            if self.rec_cjk is None:
+                multi += hanzi
+                hanzi = []
+            if getattr(self, "rec_tamil", None) is None:
+                multi += tamil
+                tamil = []
+            groups = [(self.rec, self.vocab, multi, False)]
+            if hanzi:
+                groups.append((self.rec_cjk, self.vocab_cjk, hanzi, True))
+            if tamil:
+                # Like CJK, the Tamil recognizer's ids mean nothing in self.vocab:
+                # its tokens are characters, so assemble() joins them as strings.
+                groups.append((self.rec_tamil, self.vocab_tamil, tamil, True))
         for sess, vocab, sel, as_chars in groups:
             for part in width_batches([crops[j].shape[1] for j in sel], batch):
                 idx = [sel[i] for i in part]
@@ -329,14 +350,20 @@ class OrtOCR:
                         out[j] = (text, 1.0, [(text, xc)])
         return out
 
-    def hanzi_lines(self, crops: list, batch: int = 64) -> list[bool]:
-        """Per line crop: does it hold Chinese characters (script.onnx)?"""
-        out = [False] * len(crops)
+    def script_routes(self, crops: list, batch: int = 64) -> list[int]:
+        """Per line crop: 0 = multi, 1 = hanzi, 2 = Tamil.  The binary
+        script.onnx emits [B,1] (hanzi or not) and cannot name Tamil; a
+        3-class model emits [B,3].  Pure classifier output: folding routes
+        onto loaded recognizers happens in recognize()."""
+        out = [0] * len(crops)
         for idx in width_batches([c.shape[1] for c in crops], batch):
             arr, widths = pad_batch([crops[j] for j in idx])
             p = self.script.run(None, {"x": arr, "widths": widths})[0]
             for k, j in enumerate(idx):
-                out[j] = bool(p[k] > 0.5)
+                if p.ndim == 2 and p.shape[1] >= 3:
+                    out[j] = int(np.argmax(p[k]))
+                else:
+                    out[j] = 1 if bool(p[k] > 0.5) else 0
         return out
 
     def gutter_cuts(self, boxes: np.ndarray, rec: list) -> list[list[float]]:

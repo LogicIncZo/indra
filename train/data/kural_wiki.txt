@@ -1,0 +1,33 @@
+{{header
+ | title      = திருக்குறள், மூலம்
+ | author     = திருவள்ளுவர்
+ | translator = 
+ | section    = அறத்துப்பால்
+ | previous   = 
+ | next       = [[/கடவுள் வாழ்த்து/]]
+ | year       = 1997
+ | notes      = 
+}}{{featured download}}<br><br><br>
+
+
+<pages index="திருக்குறள், மூலம்.pdf" from="1" to="1" />
+{{page break|label=}}
+
+<pages index="திருக்குறள், மூலம்.pdf" from="2" to="2" />
+{{page break|label=}}
+
+<pages index="திருக்குறள், மூலம்.pdf" from="3" to="3" />
+{{page break|label=}}
+
+<pages index="திருக்குறள், மூலம்.pdf" from="4" to="4" />
+{{page break|label=}}
+
+<pages index="திருக்குறள், மூலம்.pdf" from="5" to="5" />
+{{page break|label=}}
+
+<pages index="திருக்குறள், மூலம்.pdf" from="6" to="8" />
+
+
+[[பகுப்பு:அகரமுதலான வரிசையில் படைப்புகள்]]
+[[பகுப்பு:திருக்குறள்]]
+[[பகுப்பு:Transclusion completed]]
